@@ -169,3 +169,21 @@ class TestFilesConversions:
         )
         result = "".join(comment._docstring_diff())
         assert result == ""
+
+
+def test_handles_utf8_bom_input(tmp_path: Path) -> None:
+    """Ensure source files with UTF-8 BOM are parsed without crashing."""
+    source = (
+        b'\xef\xbb\xbfdef foo() -> int:\n'
+        b'    """Return one.\n\n'
+        b"    Returns:\n"
+        b"    -------\n"
+        b"        int: One.\n"
+        b'    """\n'
+        b"    return 1\n"
+    )
+    test_file = tmp_path / "bom_input.py"
+    test_file.write_bytes(source)
+
+    comment = pym.PyComment(test_file, fixer_settings=FixerSettings())
+    assert comment.fixed

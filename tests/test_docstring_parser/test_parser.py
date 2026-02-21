@@ -236,3 +236,55 @@ def test_compose_empty_docstring() -> None:
         ),
     ):
         compose(docstring)
+
+
+def test_roundtrip_mixed_numpy_google_preserves_types_and_descriptions() -> None:
+    """Round-trip mixed NumPy/Google docs across styles without losing metadata."""
+    source = """
+    Summary line.
+
+    Parameters
+    ----------
+        delta_secs (int): Number of seconds elapsed in the past.
+
+    Returns:
+    -------
+        value (str): Relative-time display string.
+    """
+    parsed_numpy = parse(source, DocstringStyle.NUMPYDOC)
+    assert parsed_numpy.params[0].arg_name == "delta_secs"
+    assert parsed_numpy.params[0].type_name == "int"
+    assert (
+        parsed_numpy.params[0].description
+        == "Number of seconds elapsed in the past."
+    )
+    assert parsed_numpy.returns is not None
+    assert parsed_numpy.returns.return_name == "value"
+    assert parsed_numpy.returns.type_name == "str"
+    assert parsed_numpy.returns.description == "Relative-time display string."
+
+    google_text = compose(parsed_numpy, style=DocstringStyle.GOOGLE)
+    parsed_google = parse(google_text, DocstringStyle.GOOGLE)
+    assert parsed_google.params[0].arg_name == "delta_secs"
+    assert parsed_google.params[0].type_name == "int"
+    assert (
+        parsed_google.params[0].description
+        == "Number of seconds elapsed in the past."
+    )
+    assert parsed_google.returns is not None
+    assert parsed_google.returns.return_name == "value"
+    assert parsed_google.returns.type_name == "str"
+    assert parsed_google.returns.description == "Relative-time display string."
+
+    numpy_text = compose(parsed_google, style=DocstringStyle.NUMPYDOC)
+    reparsed_numpy = parse(numpy_text, DocstringStyle.NUMPYDOC)
+    assert reparsed_numpy.params[0].arg_name == "delta_secs"
+    assert reparsed_numpy.params[0].type_name == "int"
+    assert (
+        reparsed_numpy.params[0].description
+        == "Number of seconds elapsed in the past."
+    )
+    assert reparsed_numpy.returns is not None
+    assert reparsed_numpy.returns.return_name == "value"
+    assert reparsed_numpy.returns.type_name == "str"
+    assert reparsed_numpy.returns.description == "Relative-time display string."

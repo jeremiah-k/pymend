@@ -646,6 +646,10 @@ class FunctionDocstring(DocstringInfo):
                 )
             elif doc_return.type_name and not settings.force_return_type:
                 self.issues.append(RETURN_TYPE_SET)
+                # Preserve bare NumPy return labels (e.g. `self`) across repeated
+                # normalization passes when type emission is disabled.
+                if doc_return.return_name is None:
+                    doc_return.return_name = doc_return.type_name
             doc_return.type_name = (
                 (sig_return or doc_return.type_name)
                 if settings.force_return_type
@@ -675,6 +679,8 @@ class FunctionDocstring(DocstringInfo):
                     )
         elif not settings.force_return_type:
             for doc_return in doc_returns:
+                if doc_return.return_name is None and doc_return.type_name:
+                    doc_return.return_name = doc_return.type_name
                 doc_return.type_name = None
 
     def _adjust_yields(self, docstring: dsp.Docstring, settings: FixerSettings) -> None:
@@ -742,6 +748,8 @@ class FunctionDocstring(DocstringInfo):
                 )
             elif doc_yields.type_name and not settings.force_return_type:
                 self.issues.append(RETURN_TYPE_SET)
+                if doc_yields.yield_name is None:
+                    doc_yields.yield_name = doc_yields.type_name
             doc_yields.type_name = (
                 (sig_return or doc_yields.type_name)
                 if settings.force_return_type

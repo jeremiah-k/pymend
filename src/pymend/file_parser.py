@@ -172,19 +172,29 @@ class FunctionNodeVisitor:  # pylint: disable=too-few-public-methods
         node : ast.Raise
             Current node in the traversal.
         """
-        pascal_case_regex = r"^(?:[A-Z][a-z]+)+$"
+        # PascalCase: allows acronyms (BLEError) but filters builtins
+        _block = "True|False|None|NotImplemented|Ellipsis"
+        pascal_case_regex = rf"^(?=.*[a-z])(?!({_block})$)(?:[A-Z]+[a-z]*)+$"
         if not node.exc:
             self.raises.append(DEFAULT_EXCEPTION)
         elif isinstance(node.exc, ast.Name) and re.match(
             pascal_case_regex, node.exc.id
         ):
             self.raises.append(node.exc.id)
-        elif (
-            isinstance(node.exc, ast.Call)
-            and isinstance(node.exc.func, ast.Name)
-            and re.match(pascal_case_regex, node.exc.func.id)
-        ):
-            self.raises.append(node.exc.func.id)
+        elif isinstance(node.exc, ast.Call):
+            func = node.exc.func
+            # Handle direct name: raise SomeError(...)
+            if isinstance(func, ast.Name) and re.match(pascal_case_regex, func.id):
+                self.raises.append(func.id)
+            # Handle attribute access: raise self.SomeError(...)
+            elif isinstance(func, ast.Attribute):
+                # Only extract the attribute name if it looks like an exception class
+                if re.match(pascal_case_regex, func.attr):
+                    self.raises.append(func.attr)
+                else:
+                    self.raises.append(DEFAULT_EXCEPTION)
+            else:
+                self.raises.append(DEFAULT_EXCEPTION)
         else:
             self.raises.append(DEFAULT_EXCEPTION)
         self._generic_visit(node)

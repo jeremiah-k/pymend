@@ -531,7 +531,22 @@ def test_methods() -> None:
     assert docstring.params[1].arg_name == "gamma(n=1.0)"
     assert docstring.params[1].type_name is None
     assert docstring.params[1].description == "Change the photo's gamma exposure."
-    assert not docstring.params[1].is_optional
+
+    docstring = parse(
+        """
+        Short description
+
+        Methods
+        -------
+        set_color(c: str)
+            Set the output color.
+        """
+    )
+    assert len(docstring.params) == 1
+    assert docstring.params[0].arg_name == "set_color(c: str)"
+    assert docstring.params[0].type_name is None
+    assert docstring.params[0].description == "Set the output color."
+    assert not docstring.params[0].is_optional
 
     docstring = parse(
         """
@@ -731,6 +746,76 @@ def test_returns() -> None:
     assert docstring.many_returns[1].type_name == "str"
     assert docstring.many_returns[1].description == "description for b"
     assert docstring.many_returns[1].return_name == "b"
+
+    docstring = parse(
+        """
+        Short description
+        Returns:
+        -------
+            The meshtastic.interfaces.ble.interface module.
+        """
+    )
+    assert docstring.returns is not None
+    assert docstring.returns.type_name is None
+    assert (
+        docstring.returns.description
+        == "The meshtastic.interfaces.ble.interface module."
+    )
+    assert compose(docstring) == (
+        "Short description\n"
+        "Returns\n"
+        "-------\n"
+        "The meshtastic.interfaces.ble.interface module."
+    )
+
+
+def test_mixed_numpy_headers_with_google_entries() -> None:
+    """Parse mixed NumPy headers with indented Google-style entries."""
+    docstring = parse(
+        """
+        Short description
+        Parameters
+        ----------
+            delta_secs (int): Number of seconds elapsed in the past.
+
+        Returns:
+        -------
+            The generated relative-time string.
+        """
+    )
+    assert len(docstring.params) == 1
+    assert docstring.params[0].arg_name == "delta_secs"
+    assert docstring.params[0].type_name == "int"
+    assert docstring.params[0].description == "Number of seconds elapsed in the past."
+    assert docstring.returns is not None
+    assert docstring.returns.type_name is None
+    assert docstring.returns.description == "The generated relative-time string."
+
+
+def test_mixed_numpy_returns_with_google_typed_entry() -> None:
+    """Parse typed Google-style inline return entries under NumPy headers."""
+    docstring = parse(
+        """
+        Returns:
+        -------
+            value (int): Count of connected devices.
+        """
+    )
+    assert docstring.returns is not None
+    assert docstring.returns.return_name == "value"
+    assert docstring.returns.type_name == "int"
+    assert docstring.returns.description == "Count of connected devices."
+
+
+def test_compose_preserves_named_return_without_type() -> None:
+    """Keep single-name returns stable when no explicit type is enforced."""
+    source = (
+        "Returns\n"
+        "-------\n"
+        "self\n"
+        "    The same instance."
+    )
+    assert compose(parse(source)) == source
 
 
 def test_raises() -> None:

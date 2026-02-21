@@ -58,7 +58,11 @@ def _pairwise(
 
 
 KV_REGEX = re.compile(r"^[^\s].*$", flags=re.MULTILINE)
+INLINE_KEY_VALUE_REGEX = re.compile(r"^(?P<key>[^:]+):\s*(?P<value>.+)$")
 PARAM_KEY_REGEX = re.compile(r"^(?P<name>.*?)(?:\s+:\s*(?P<type>.*?))?$")
+GOOGLE_TYPED_PARAM_KEY_REGEX = re.compile(
+    r"^(?P<name>.+?)\s*\((?P<type>[^()]*)\)\s*$"
+)
 PARAM_OPTIONAL_REGEX = re.compile(r"(?P<type>.*?)(?:, optional|\(optional\))$")
 
 # numpydoc format has no formal grammar for this,
@@ -68,6 +72,86 @@ PARAM_DEFAULT_REGEX = re.compile(
 )
 
 RETURN_KEY_REGEX = re.compile(r"^(?:(?P<name>.*?)\s*:\s*)?(?P<type>.*?)$")
+_DESCRIPTION_ONLY_RETURN_MIN_WORDS = 4
+_DESCRIPTION_LEADING_WORD_MIN_WORDS = 2
+
+
+def _looks_like_description_only_return_key(key: str, value: str) -> bool:
+    """Detect description-only return/yield entries in mixed-style docstrings.
+
+    Mixed Google/NumPy docstrings can contain a section heading with a trailing
+    colon and dashed underline, followed by a single prose line in the body.
+    That prose line is descriptive text, not a type. Parsing it as a
+    type causes downstream loss of descriptions and idempotence failures.
+
+    Parameters
+    ----------
+    key : str
+        Parsed key line candidate from the section body.
+    value : str
+        Parsed value block associated with the key.
+
+    Returns
+    -------
+    bool
+        True when ``key`` should be treated as description text instead of a type.
+    """
+    if value.strip():
+        return False
+
+    key = key.strip()
+    if not key or ":" in key:
+        return False
+
+    words = key.split()
+    if len(words) >= _DESCRIPTION_ONLY_RETURN_MIN_WORDS:
+        return True
+
+    if not words:
+        return False
+
+    first = words[0].strip("`'\"()").lower()
+    if first in {
+        "the",
+        "a",
+        "an",
+        "this",
+        "that",
+        "these",
+        "those",
+        "true",
+        "false",
+        "if",
+        "when",
+        "whether",
+        "returns",
+        "return",
+    } and len(words) >= _DESCRIPTION_LEADING_WORD_MIN_WORDS:
+        return True
+
+    return key.endswith(".")
+
+
+def _normalize_google_typed_key(key: str) -> str:
+    """Normalize ``name (type)`` keys into ``name : type`` form.
+
+    This allows NumPy section parsers to consume mixed Google-style inline keys
+    while still using the existing ``name : type`` parsing logic.
+
+    Parameters
+    ----------
+    key : str
+        Raw section key candidate.
+
+    Returns
+    -------
+    str
+        Normalized key when applicable, otherwise ``key`` unchanged.
+    """
+    match = GOOGLE_TYPED_PARAM_KEY_REGEX.match(key)
+    if match is None:
+        return key
+    return f"{match.group('name').strip()} : {match.group('type').strip()}"
 
 
 class Section:
@@ -102,7 +186,7 @@ class Section:
             Regex pattern as a string.
         """
         dashes = "-" * len(self.title)
-        return rf"^({self.title})\s*?\n{dashes}\s*$"
+        return rf"^({self.title}):?\s*?\n{dashes}\s*$"
 
     def parse(self, text: str) -> Iterable[DocstringMeta]:
         """Parse ``DocstringMeta`` objects from the body of this section.
@@ -163,11 +247,27 @@ class _KVSection(Section):
         DocstringMeta
             Items parsed from the docstring.
         """
+        text = inspect.cleandoc(text)
+        if not text:
+            return
+
         for match, next_match in _pairwise(KV_REGEX.finditer(text)):
+            key = match.group().strip()
             start = match.end()
             end = next_match.start() if next_match is not None else None
-            value = text[start:end]
-            yield self._parse_item(key=match.group(), value=inspect.cleandoc(value))
+            value = inspect.cleandoc(text[start:end])
+
+            # Accept mixed Google-style inline entries within NumPy sections,
+            # e.g. ``param (str): description``. This preserves idempotence when
+            # normalizing mixed-format repositories.
+            inline_match = INLINE_KEY_VALUE_REGEX.match(key)
+            if self.key != "method" and inline_match and " :" not in key:
+                key = inline_match.group("key").rstrip()
+                inline_value = inline_match.group("value").strip()
+                if inline_value:
+                    value = inline_value if not value else f"{inline_value}\n{value}"
+
+            yield self._parse_item(key=key, value=value)
 
 
 class _SphinxSection(Section):
@@ -225,6 +325,9 @@ class ParamSection(_KVSection):
         ParseError
             If mandatory parts of the section were parsed incorrectly.
         """
+        if self.key in {"param", "other_param", "receives", "attribute"}:
+            key = _normalize_google_typed_key(key)
+
         match = PARAM_KEY_REGEX.match(key)
         arg_name = type_name = is_optional = None
         if match is None:
@@ -323,6 +426,17 @@ class ReturnsSection(_KVSection):
         DocstringReturns
             Parsed representation of the return item.
         """
+        if _looks_like_description_only_return_key(key, value):
+            return DocstringReturns(
+                args=[self.key],
+                description=clean_str(key),
+                type_name=None,
+                is_generator=self.is_generator,
+                return_name=None,
+            )
+
+        key = _normalize_google_typed_key(key)
+
         match = RETURN_KEY_REGEX.match(key)
         if match is not None:
             return_name = match.group("name")
@@ -361,6 +475,7 @@ class YieldsSection(_KVSection):
         DocstringYields
             Parsed representation of the yield item.
         """
+        key = _normalize_google_typed_key(key)
         match = RETURN_KEY_REGEX.match(key)
         if match is not None:
             yield_name = match.group("name")
@@ -746,6 +861,13 @@ def compose(  # noqa: PLR0915, PLR0912
             head += f" : {one.type_name}"
         elif one.type_name:
             head = one.type_name
+        elif (
+            not head
+            and isinstance(one, (DocstringReturns, DocstringYields))
+            and one.description
+        ):
+            parts.extend(one.description.splitlines())
+            return
         elif not head:
             head = "__missing_required_field__"
 

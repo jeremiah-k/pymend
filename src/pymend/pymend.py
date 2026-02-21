@@ -79,7 +79,7 @@ class PyComment:
         """
         self.input_file = input_file
         self.style = Styles(input_style, output_style)
-        input_lines = self.input_file.read_text(encoding="utf-8")
+        input_lines = self.input_file.read_text(encoding="utf-8-sig")
         self._input = FileContentRepresentation(
             input_lines.splitlines(keepends=True), input_lines
         )
